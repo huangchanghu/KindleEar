@@ -24,7 +24,17 @@ class AdvSettings(BaseHandler):
     __url__ = "/adv"
     #@etagged()
     def GET(self):
-        raise web.seeother(AdvWhiteList.__url__)
+        raise web.seeother(AdvDeliverNow.__url__)
+
+#现在推送
+class AdvDeliverNow(BaseHandler):
+    __url__ = "/advdelivernow"
+    @etagged()
+    def GET(self):
+        user = self.getcurrentuser()
+        books = [item for item in Book.all() if user.name in item.users]
+        return self.render('advdelivernow.html', "Deliver now", current='advsetting',
+            user=user, advcurr='delivernow', books=books, booksnum=len(books))
 
 #设置邮件白名单
 class AdvWhiteList(BaseHandler):
@@ -32,8 +42,8 @@ class AdvWhiteList(BaseHandler):
     @etagged()
     def GET(self):
         user = self.getcurrentuser()
-        return self.render('advwhitelist.html',"White List",current='advsetting',
-            user=user,advcurr='whitelist')
+        return self.render('advwhitelist.html', "White List", current='advsetting',
+            user=user, advcurr='whitelist')
         
     def POST(self):
         user = self.getcurrentuser()
@@ -57,7 +67,7 @@ class AdvArchive(BaseHandler):
     def GET(self):
         user = self.getcurrentuser()
         
-        return self.render('advarchive.html', "Share", current='advsetting', user=user, advcurr='share',
+        return self.render('advarchive.html', "Archive", current='advsetting', user=user, advcurr='archive',
             savetoevernote=SAVE_TO_EVERNOTE, savetowiz=SAVE_TO_WIZ, savetopocket=SAVE_TO_POCKET, 
             savetoinstapaper=SAVE_TO_INSTAPAPER, ke_decrypt=ke_decrypt,
             shareonxweibo=SHARE_ON_XWEIBO, shareontweibo=SHARE_ON_TWEIBO, shareonfacebook=SHARE_ON_FACEBOOK,
@@ -162,6 +172,7 @@ class AdvImport(BaseHandler):
     def POST(self):
         import opml
         x = web.input(importfile={})
+        defaultIsfulltext = bool(x.get('defaultIsfulltext')) #默认是否按全文RSS导入
         if 'importfile' in x:
             user = self.getcurrentuser()
             try:
@@ -171,7 +182,13 @@ class AdvImport(BaseHandler):
             
             for o in self.walkOutline(rsslist):
                 title, url, isfulltext = o.text, urllib.unquote_plus(o.xmlUrl), o.isFulltext #isFulltext为非标准属性
-                isfulltext = bool(isfulltext.lower() in ('true', '1'))
+                if isfulltext.lower() in ('true', '1'):
+                    isfulltext = True
+                elif isfulltext.lower() in ('false', '0'):
+                    isfulltext = False
+                else:
+                    isfulltext = defaultIsfulltext
+                    
                 if title and url:
                     try:
                         url = url.decode('utf-8')
@@ -254,9 +271,9 @@ class AdvUploadCoverImageAjax(BaseHandler):
     MAX_IMAGE_PIXEL = 1024
     def POST(self):
         ret = 'ok'
+        user = self.getcurrentuser(forAjax=True)
         try:
             x = web.input(coverfile={})
-            user = self.getcurrentuser()
             file_ = x['coverfile'].file
             if user and file_:
                 #将图像转换为JPEG格式，同时限制分辨率不超过1024
@@ -280,11 +297,55 @@ class AdvDeleteCoverImageAjax(BaseHandler):
     __url__ = "/advdeletecoverimageajax"
     def POST(self):
         ret = {'status': 'ok'}
+        user = self.getcurrentuser(forAjax=True)
         try:
             confirmKey = web.input().get('action')
-            user = self.getcurrentuser()
             if user and confirmKey == 'delete':
                 user.cover = None
+                user.put()
+        except Exception as e:
+            ret['status'] = str(e)
+            
+        return json.dumps(ret)
+
+#在本地选择一个样式文件上传做为所有书籍的样式
+class AdvUploadCss(BaseHandler):
+    __url__ = "/advuploadcss"
+    @etagged()
+    def GET(self, tips=None):
+        user = self.getcurrentuser()
+        return self.render('advuploadcss.html', "Stylesheet", current='advsetting',
+            user=user, advcurr='uploadcss', formaction=AdvUploadCssAjax.__url__, 
+            deletecsshref=AdvDeleteCssAjax.__url__, tips=tips)
+
+#AJAX接口的上传CSS处理函数
+class AdvUploadCssAjax(BaseHandler):
+    __url__ = "/advuploadcssajax"
+    def POST(self):
+        ret = 'ok'
+        user = self.getcurrentuser(forAjax=True)
+        try:
+            x = web.input(cssfile={})
+            file_ = x['cssfile'].file
+            if user and file_:
+                #这里应该要验证样式表的有效性，但是现在先忽略了
+                user.css_content = db.Text(file_.read(), encoding="utf-8")
+                user.put()
+        except Exception as e:
+            ret = str(e)
+            
+        return ret
+
+#删除上传的CSS
+class AdvDeleteCssAjax(BaseHandler):
+    __url__ = "/advdeletecssajax"
+    def POST(self):
+        ret = {'status': 'ok'}
+        user = self.getcurrentuser(forAjax=True)
+        try:
+            confirmKey = web.input().get('action')
+            if user and confirmKey == 'delete':
+                user.css_content = ''
                 user.put()
         except Exception as e:
             ret['status'] = str(e)
@@ -353,7 +414,7 @@ class VerifyAjax(BaseHandler):
             respDict['status'] = _('Request type[%s] unsupported') % verType
             return json.dumps(respDict)
         
-        user = self.getcurrentuser()
+        user = self.getcurrentuser(forAjax=True)
         
         username = web.input().get('username', '')
         password = web.input().get('password', '')
